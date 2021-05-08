@@ -1,0 +1,40 @@
+#pragma kernel RenderSimulation
+
+struct Agent{
+    float angle;
+    float2 position;
+    float4 color;
+};
+
+RWStructuredBuffer<Agent> agents;
+
+RWTexture2D<float4> TargetTexture;
+
+uint agentsAmount;
+
+[numthreads(16,1,1)]
+void RenderSimulation (uint3 id : SV_DispatchThreadID)
+{
+    Agent agent = agents[id.x];
+    int x = (int)agent.position.x;
+    int y = (int)agent.position.y;
+    TargetTexture[int2(x,y)] = agent.color;
+}
+
+
+#pragma kernel ClearTexture
+
+RWTexture2D<float4> Source;
+uint width;
+uint height;
+
+[numthreads(8,8,1)]
+void ClearTexture (uint3 id : SV_DispatchThreadID)
+{
+    if (id.x < 0 || id.x >= width || id.y < 0 || id.y >= height) {
+		return;
+	}
+
+	Source[id.xy] = 0;
+}
+

@@ -1,0 +1,116 @@
+#pragma kernel AgentUpdate
+
+struct Agent{
+    float angle;
+    float2 position;
+    float4 color;
+};
+
+struct AgentsSettings{
+    float moveSpeed;
+    float turnSpeed;
+
+    float sensorAngleDegrees;
+    float sensorOffset;
+    int sensorSize;
+};
+
+StructuredBuffer<AgentsSettings> agentsSettings;
+
+RWStructuredBuffer<Agent> agents;
+
+
+RWTexture2D<float4> TrailMap;
+RWTexture2D<float4> DiffuseTrailTexture;
+
+int width;
+int height;
+
+float deltaTime;
+float time;
+
+// Hash function www.cs.ubc.ca/~rbridson/docs/schechter-sca08-turbulence.pdf
+uint hash(uint state)
+{
+    state ^= 2747636419u;
+    state *= 2654435769u;
+    state ^= state >> 16;
+    state *= 2654435769u;
+    state ^= state >> 16;
+    state *= 2654435769u;
+    return state;
+}
+
+float scaleToRange01(uint state)
+{
+    return state / 4294967295.0;
+}
+
+float sense(Agent agent, AgentsSettings settings, float sensorAngleOffset) {
+	float sensorAngle = agent.angle + sensorAngleOffset;
+	float2 sensorDir = float2(cos(sensorAngle), sin(sensorAngle));
+
+	float2 sensorPos = agent.position + sensorDir * settings.sensorOffset;
+	int sensorCentreX = (int) sensorPos.x;
+	int sensorCentreY = (int) sensorPos.y;
+
+	float sum = 0;
+
+	int4 senseWeight = int4(1, 1, 1, 1);
+
+	for (int offsetX = -settings.sensorSize; offsetX <= settings.sensorSize; offsetX ++) {
+		for (int offsetY = -settings.sensorSize; offsetY <= settings.sensorSize; offsetY ++) {
+			int sampleX = min(width - 1, max(0, sensorCentreX + offsetX));
+			int sampleY = min(height - 1, max(0, sensorCentreY + offsetY));
+			sum += dot(senseWeight, TrailMap[int2(sampleX,sampleY)]);
+		}
+	}
+
+	return sum;
+}
+
+
+[numthreads(16,1,1)]
+void AgentUpdate (uint3 id : SV_DispatchThreadID)
+{
+    Agent agent = agents[id.x];
+    AgentsSettings settings = agentsSettings[0];
+
+    uint random = hash(agent.position.y * width + agent.position.x + hash(id.x + time * 100000));
+
+    float sensorAngleRad = settings.sensorAngleDegrees * (3.1415 / 180);
+    float weightForward = sense(agent, settings, 0);
+	float weightLeft = sense(agent, settings, sensorAngleRad);
+	float weightRight = sense(agent, settings, -sensorAngleRad);
+
+    float turnSpeed = settings.turnSpeed * 2 * 3.1415;
+    float randomSteer = scaleToRange01(random);
+
+    if(weightForward > weightLeft && weightForward > weightRight){
+        //Continue in the same direction;
+    }else if(weightForward < weightLeft && weightForward < weightRight){
+        //Apply a random movement
+        agents[id.x].angle += (randomSteer) * 2 * turnSpeed;
+    }else if(weightRight > weightLeft){
+        agents[id.x].angle -= randomSteer * turnSpeed;
+    }else if(weightLeft < weightRight){
+        agents[id.x].angle += randomSteer * turnSpeed;
+    }
+
+    float2 direction = float2(cos(agent.angle), sin(agent.angle));
+    float2 newPos = agent.position + direction * settings.moveSpeed;
+
+    // Clamp position to fit the boundaries.
+    if(newPos.x < 0 || newPos.x >= width || newPos.y < 0 || newPos.y >= height){
+        float randomAngle = scaleToRange01(random) * 2 * 3.1415;
+
+        newPos.x = min(width-1,max(0, newPos.x));
+		newPos.y = min(height-1,max(0, newPos.y));
+		agents[id.x].angle = randomAngle;
+    }else{
+        float4 oldTrail = TrailMap[int2(newPos)];
+        TrailMap[int2(newPos)] = min(1, oldTrail * 100);
+    }
+
+    agents[id.x].position = newPos;
+}
